@@ -112,6 +112,15 @@ export function preflight(req: TemplateReuseRequest): PreflightResult {
     errors.push('POLICY: request_id invalid or non-unique');
   }
 
+  // 3b) 1B-3B1B1 D1/D2 prerequisite guard: package observers, shape
+  // inspectors and signature tools must never be invoked when their
+  // filesystem prerequisites are absent. The structured policy errors
+  // accumulated above are authoritative; an expected invalid-input failure
+  // must not escape as an uncontrolled internal exception.
+  if (!fs.existsSync(req.input_path) || !fs.existsSync(req.staging_root)) {
+    return { ok: false, errors, evidence };
+  }
+
   // 4) selector resolution (independent of pptx-automizer)
   const slideId = resolveSlideId(req.source_slide ?? req.element_source_slide);
   if (slideId === null) {

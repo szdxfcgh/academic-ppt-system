@@ -99,11 +99,21 @@ export function postflight(req: TemplateReuseRequest, manifest: OperationManifes
           // Post-execution source immutability (additional guard). The semantic
           // comparison still uses the PRE-EXECUTION trusted signature.
           const expectedSha = typeof trusted.input_hash === 'string' ? trusted.input_hash : null;
-          const afterSha = sha256File(req.input_path);
+          // 1B-3B1B1 D3: missing/unreadable/changed staged source after the
+          // trusted preflight is a structured immutability failure — the
+          // filesystem exception must never escape into the CLI catch.
+          let afterSha: string | null = null;
+          try {
+            afterSha = sha256File(req.input_path);
+            evidence.source_immutability_check = 'VERIFIED';
+          } catch {
+            afterSha = null;
+            evidence.source_immutability_check = 'UNREADABLE_OR_MISSING';
+          }
           evidence.source_sha256_after = afterSha;
           evidence.source_sha256_expected = expectedSha;
           if (expectedSha !== null && afterSha !== expectedSha) {
-            errors.push('POSTFLIGHT: SOURCE_MUTATED_AFTER_PREFLIGHT (staged source SHA changed after trusted preflight)');
+            errors.push('POSTFLIGHT: SOURCE_MUTATED_AFTER_PREFLIGHT (staged source SHA changed or unreadable after trusted preflight)');
           }
           const dims = ['owned_shape_names', 'text_markers', 'object_classes'] as const;
           const mismatches = dims.filter((d) => JSON.stringify(trustedSig[d]) !== JSON.stringify(appSig[d]));
