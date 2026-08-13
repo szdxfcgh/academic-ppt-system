@@ -1,0 +1,32 @@
+{
+  "schema_version": "1.0",
+  "experiment": "pptx-automizer template-reuse (Phase 1B-3A)",
+  "upstream": {
+    "project_name": "pptx-automizer",
+    "repository_url": "https://github.com/singerla/pptx-automizer.git",
+    "package_version": "0.8.2",
+    "license": "MIT",
+    "license_holder": "Thomas Singer (2021)",
+    "pinned_commit": "439350427b0f4951ee9e1e42ce97aba9e77356df",
+    "pinned_commit_source": "isolated upstream clone HEAD (verified revision, not guessed)",
+    "isolated_pptxgenjs": "3.12.0"
+  },
+  "fixture": {
+    "id": "APPT_TRP_FIXTURE_CORE_V1_1",
+    "artifact": "rights_clear_template_reuse_core_v1_1.pptx",
+    "sha256": "8833B36A6C922C222B729E362701F4795E39707DF7EBAAAD892F4DF44FDEF243",
+    "bytes": 85077,
+    "synthetic_rights_clear": true,
+    "binary_published": false
+  },
+  "adapter": {
+    "contract": "academicppt.template-reuse/0.1.0-draft",
+    "operations": ["COPY_SLIDE", "COPY_ELEMENT"],
+    "implementation": "experiments/oss_harvesting/pptx_automizer/adapter",
+    "isolation": "one-shot subprocess, file+JSON only, no production Core imports"
+  },
+  "harvest_status": "EVALUATING",
+  "last_completed_gate": "Phase 1B-3A",
+  "last_gate_status": "PPTX_AUTOMIZER_PHASE1B3A_MINIMAL_ADAPTER_IMPLEMENTED",
+  "evidence": "experiments/oss_harvesting/pptx_automizer + evidence/oss_harvesting/pptx_automizer (sanitized)"
+}

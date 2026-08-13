@@ -1,0 +1,15 @@
+{
+  "gate": "Phase 1B-3A",
+  "status": "PPTX_AUTOMIZER_PHASE1B3A_MINIMAL_ADAPTER_IMPLEMENTED",
+  "runtime": "pptx-automizer 0.8.2",
+  "operations": ["COPY_SLIDE", "COPY_ELEMENT"],
+  "unsupported": ["REPLACE_TEXT", "REPLACE_IMAGE", "MODIFY_CHART_DATA", "MODIFY_TABLE_DATA", "SET_NOTES", "GENERATE_ELEMENT"],
+  "copy_slide": "SUCCEEDED_WITH_WARNINGS",
+  "copy_element": "SUCCEEDED_WITH_WARNINGS",
+  "network_calls": 0,
+  "powerpoint": 0,
+  "com": 0,
+  "production_integration": false,
+  "phase1b3b_completed": false,
+  "fixture_binary_published": false
+}

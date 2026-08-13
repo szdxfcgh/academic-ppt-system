@@ -1,0 +1,12 @@
+{
+  "schema_version": "academicppt.template-reuse/0.1.0-draft",
+  "request_id": "example-copy-slide-001",
+  "operation": "COPY_SLIDE",
+  "source_slide": "FIX_SLIDE_02_OBJECTS",
+  "target": "APPEND",
+  "input_path": "staging/copy_slide/rights_clear_template_reuse_core_v1_1.pptx",
+  "output_path": "outputs/copy_slide_output.pptx",
+  "staging_root": "staging",
+  "output_dir": "outputs",
+  "response_path": "outputs/copy_slide_response.json"
+}

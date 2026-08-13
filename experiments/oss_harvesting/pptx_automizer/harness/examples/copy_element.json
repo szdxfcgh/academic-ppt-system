@@ -1,0 +1,14 @@
+{
+  "schema_version": "academicppt.template-reuse/0.1.0-draft",
+  "request_id": "example-copy-element-001",
+  "operation": "COPY_ELEMENT",
+  "source_slide": "FIX_SLIDE_02_OBJECTS",
+  "element": "OWNED_AUTOSHAPE_01",
+  "element_source_slide": "FIX_SLIDE_02_OBJECTS",
+  "target_base_slide": "FIX_SLIDE_01_TITLE",
+  "input_path": "staging/copy_element/rights_clear_template_reuse_core_v1_1.pptx",
+  "output_path": "outputs/copy_element_output.pptx",
+  "staging_root": "staging",
+  "output_dir": "outputs",
+  "response_path": "outputs/copy_element_response.json"
+}
