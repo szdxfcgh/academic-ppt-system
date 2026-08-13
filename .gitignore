@@ -1,0 +1,42 @@
+# Secrets — never commit
+.env
+.env.*
+*.key
+*.pem
+*.p12
+*.pfx
+
+# Dependencies
+node_modules/
+.venv/
+venv/
+
+# Python caches
+__pycache__/
+.pytest_cache/
+*.pyc
+
+# Local/derived artifacts
+work/
+reports/
+local-output/
+tmp/
+temp/
+
+# Logs
+*.log
+
+# Office temp/lock files
+~$*
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Large runtime artifacts (default exclusion)
+*.pptx.tmp
+*.png.tmp
+*.pdf.tmp
+process-dumps/
+raw-stdout/
+raw-stderr/
