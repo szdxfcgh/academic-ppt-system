@@ -5,6 +5,7 @@
 // Process boundary: file + JSON only; no imports from AcademicPPT production Core.
 import * as fs from 'fs';
 import * as path from 'path';
+import { execFileSync } from 'child_process';
 // CommonJS `import = require` bindings: the emitted JS binds the hook targets
 // DIRECTLY to the real Node core-module export objects (const http =
 // require('http')), never to TypeScript __importStar namespace wrappers whose
@@ -80,6 +81,15 @@ function installNetworkGuard(): void {
 }
 
 installNetworkGuard();
+
+// 1B-3B5R2B deterministic ZIP normalization. The adapter owns ONE
+// serialization boundary strictly AFTER successful upstream execution and
+// BEFORE any postflight observation: the generated archive's member
+// timestamps are rewritten to the documented constant so output bytes are
+// reproducible. It never parses OOXML payloads; postflight remains the final
+// output_hash / output_size authority and only ever sees normalized bytes.
+const PYTHON = process.env.PYTHON || 'python';
+const ZIP_NORMALIZER = path.resolve(__dirname, '..', 'tooling', 'normalize_pptx_zip.py');
 
 const REQUIRED_FIELDS = [
   'schema_version',
@@ -181,6 +191,35 @@ async function main(): Promise<number> {
     return 0;
   }
 
+  // 7b) 1B-3B5R2B deterministic ZIP normalization (only after execute success).
+  //    Normalization failure is a structured FAILED with OUTPUT_NORMALIZATION_
+  //    FAILURE; postflight is never reached, and the nondeterministic upstream
+  //    artifact is best-effort removed so it cannot be presented as output.
+  const normEvidence: Record<string, unknown> = {};
+  try {
+    execFileSync(PYTHON, [ZIP_NORMALIZER, req.output_path], { encoding: 'utf-8', maxBuffer: 64 * 1024 * 1024 });
+    normEvidence.output_normalization = 'APPLIED';
+    normEvidence.normalization_policy = 'ZIP_MEMBER_TIMESTAMP_1980_01_01';
+  } catch (err: any) {
+    const cleanupIssues: string[] = [];
+    for (const p of [req.output_path, `${req.output_path}.normtmp`]) {
+      try {
+        if (fs.existsSync(p)) fs.unlinkSync(p);
+      } catch {
+        cleanupIssues.push(path.basename(p));
+      }
+    }
+    const detail = err && err.message ? String(err.message) : String(err);
+    const cleanupNote = cleanupIssues.length ? ` (cleanup failed for: ${cleanupIssues.join(',')})` : '';
+    safeWrite(buildResponse({
+      request_id: req.request_id,
+      status: 'FAILED',
+      errors: [`OUTPUT_NORMALIZATION_FAILURE: ${detail.slice(0, 200)}${cleanupNote}`],
+      evidence: { ...pf.evidence, ...ex.evidence, output_normalization: 'FAILED', network_attempts: networkAttempts.slice() },
+    }));
+    return 0;
+  }
+
   // 8) static postflight
   // Trusted pre-execution source evidence (captured by preflight BEFORE the
   // untrusted upstream boundary) is passed explicitly; the postflight must
@@ -199,7 +238,7 @@ async function main(): Promise<number> {
     operation_manifest: ex.operation_manifest,
     warnings: [...po.warnings],
     errors: po.errors,
-    evidence: { ...pf.evidence, ...ex.evidence, ...po.evidence, network_attempts: networkAttempts.slice() },
+    evidence: { ...pf.evidence, ...ex.evidence, ...po.evidence, ...normEvidence, network_attempts: networkAttempts.slice() },
   }));
   return 0;
 }
