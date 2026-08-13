@@ -8,6 +8,7 @@ import { TemplateReuseRequest, OperationManifest } from './contracts';
 const PYTHON = process.env.PYTHON || 'python';
 const OBSERVER = path.resolve(__dirname, '..', '..', 'tooling', 'observe_pptx.py');
 const SHAPE_INSPECTOR = path.resolve(__dirname, '..', 'tooling', 'inspect_shapes.py');
+const SIGNATURE_TOOL = path.resolve(__dirname, '..', 'tooling', 'semantic_slide_signature.py');
 
 export interface PostflightResult {
   ok: boolean;
@@ -72,9 +73,29 @@ export function postflight(req: TemplateReuseRequest, manifest: OperationManifes
   // operation-specific observations
   if (req.operation === 'COPY_SLIDE') {
     const count = obs.presentation_sldId_count ?? 0;
-    if (count < 5) errors.push('POSTFLIGHT: copied slide not appended');
-    else warnings.push(`POSTFLIGHT: copied slide observed (slide ${count} of ${count})`);
-    evidence.operation_observation = `copied slide present as slide ${count}`;
+    if (count < 5) {
+      errors.push('POSTFLIGHT: copied slide not appended');
+    } else {
+      // Phase 1B-3B1A: semantic identity invariant.
+      // Prove the appended slide IS the requested source slide, not merely
+      // that a fifth slide exists. Source identity is resolved from the
+      // operation manifest (request-driven, never hard-coded).
+      const srcNum = manifest?.source_slide_identity as number | null;
+      const srcPart = `slide${srcNum}.xml`;
+      const appendedPart = `slide${count}.xml`;
+      const srcSig = runPythonToFile(SIGNATURE_TOOL, [req.input_path, srcPart], path.join(path.dirname(req.output_path), '_source_signature.json'));
+      const appSig = runPythonToFile(SIGNATURE_TOOL, [req.output_path, appendedPart], path.join(path.dirname(req.output_path), '_appended_signature.json'));
+      evidence.source_signature = srcSig;
+      evidence.appended_signature = appSig;
+      const dims = ['owned_shape_names', 'text_markers', 'object_classes'] as const;
+      const mismatches = dims.filter((d) => JSON.stringify(srcSig[d]) !== JSON.stringify(appSig[d]));
+      if (mismatches.length > 0) {
+        errors.push(`POSTFLIGHT: COPY_SLIDE_IDENTITY_MISMATCH dimensions=${mismatches.join(',')} (${srcPart} != ${appendedPart})`);
+      } else {
+        warnings.push(`POSTFLIGHT: semantic identity matched (${srcPart} == ${appendedPart})`);
+      }
+      evidence.operation_observation = `copied slide present as slide ${count}; identity ${mismatches.length === 0 ? 'MATCHED' : 'MISMATCHED'}`;
+    }
   } else if (req.operation === 'COPY_ELEMENT') {
     const shapes = runPythonToFile(SHAPE_INSPECTOR, [req.output_path], path.join(path.dirname(req.output_path), '_postflight_shapes_el.json'));
     const slideNames = shapes.slide_shapes as Record<string, string[]>;
