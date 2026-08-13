@@ -32,7 +32,13 @@ export function postflight(req: TemplateReuseRequest, manifest: OperationManifes
   evidence.output_size = raw.length;
 
   // independent package observation
-  const obs = runPythonToFile(OBSERVER, [req.output_path], path.join(path.dirname(req.output_path), '_postflight_observe.json'));
+  const obsRes = safeRunPythonToFile(OBSERVER, [req.output_path], path.join(path.dirname(req.output_path), '_postflight_observe.json'));
+  if (!obsRes.ok) {
+    // structured hard failure; nothing below may depend on fabricated obs data
+    errors.push(`POSTFLIGHT: OBSERVER_FAILED (${obsRes.diagnostic})`);
+    return { ok: false, warnings, errors, evidence };
+  }
+  const obs = obsRes.value;
   evidence.observer_status = obs.status;
   evidence.presentation_sldId_count = obs.presentation_sldId_count;
   evidence.forbidden_part_hits = obs.forbidden_part_hits || [];
@@ -54,7 +60,13 @@ export function postflight(req: TemplateReuseRequest, manifest: OperationManifes
   }
 
   // external relationships allowlist
-  const ext = runPythonToFile(SHAPE_INSPECTOR, [req.output_path], path.join(path.dirname(req.output_path), '_postflight_shapes.json'));
+  const extRes = safeRunPythonToFile(SHAPE_INSPECTOR, [req.output_path], path.join(path.dirname(req.output_path), '_postflight_shapes.json'));
+  if (!extRes.ok) {
+    // structured hard failure; external_relationships / slide_shapes must not be fabricated
+    errors.push(`POSTFLIGHT: SHAPE_INSPECTOR_FAILED (${extRes.diagnostic})`);
+    return { ok: false, warnings, errors, evidence };
+  }
+  const ext = extRes.value;
   const external = ext.external_relationships || [];
   evidence.external_relationships = external;
   for (const e of external) {
@@ -93,63 +105,102 @@ export function postflight(req: TemplateReuseRequest, manifest: OperationManifes
         if (!trustedSig || trusted.source_slide_part !== srcPart) {
           errors.push(`POSTFLIGHT: SIGNATURE_EXTRACTION_FAILED (no trusted pre-execution source signature for ${srcPart})`);
         } else {
-          const appSig = runPythonToFile(SIGNATURE_TOOL, [req.output_path, appendedPart], path.join(path.dirname(req.output_path), '_appended_signature.json'));
-          evidence.trusted_source_signature = trustedSig;
-          evidence.appended_signature = appSig;
-          // Post-execution source immutability (additional guard). The semantic
-          // comparison still uses the PRE-EXECUTION trusted signature.
-          const expectedSha = typeof trusted.input_hash === 'string' ? trusted.input_hash : null;
-          // 1B-3B1B1 D3: missing/unreadable/changed staged source after the
-          // trusted preflight is a structured immutability failure — the
-          // filesystem exception must never escape into the CLI catch.
-          let afterSha: string | null = null;
-          try {
-            afterSha = sha256File(req.input_path);
-            evidence.source_immutability_check = 'VERIFIED';
-          } catch {
-            afterSha = null;
-            evidence.source_immutability_check = 'UNREADABLE_OR_MISSING';
-          }
-          evidence.source_sha256_after = afterSha;
-          evidence.source_sha256_expected = expectedSha;
-          if (expectedSha !== null && afterSha !== expectedSha) {
-            errors.push('POSTFLIGHT: SOURCE_MUTATED_AFTER_PREFLIGHT (staged source SHA changed or unreadable after trusted preflight)');
-          }
-          const dims = ['owned_shape_names', 'text_markers', 'object_classes'] as const;
-          const mismatches = dims.filter((d) => JSON.stringify(trustedSig[d]) !== JSON.stringify(appSig[d]));
-          if (mismatches.length > 0) {
-            errors.push(`POSTFLIGHT: COPY_SLIDE_IDENTITY_MISMATCH dimensions=${mismatches.join(',')} (${srcPart} != ${appendedPart})`);
+          // 1B-3B2R1 VH1: appended candidate signature extraction is contained;
+          // a failure (e.g. appended slide part absent in a broken candidate)
+          // is a structured hard failure, never an escaping exception, and the
+          // identity evaluation must not proceed with fabricated data.
+          const appSigRes = safeRunPythonToFile(SIGNATURE_TOOL, [req.output_path, appendedPart], path.join(path.dirname(req.output_path), '_appended_signature.json'));
+          if (!appSigRes.ok) {
+            errors.push(`POSTFLIGHT: SIGNATURE_EXTRACTION_FAILED (appended candidate ${appendedPart} signature extraction failed: ${appSigRes.diagnostic})`);
           } else {
-            warnings.push(`POSTFLIGHT: semantic identity matched (${srcPart} == ${appendedPart})`);
+            const appSig = appSigRes.value;
+            evidence.trusted_source_signature = trustedSig;
+            evidence.appended_signature = appSig;
+            // Post-execution source immutability (additional guard). The semantic
+            // comparison still uses the PRE-EXECUTION trusted signature.
+            const expectedSha = typeof trusted.input_hash === 'string' ? trusted.input_hash : null;
+            // 1B-3B1B1 D3: missing/unreadable/changed staged source after the
+            // trusted preflight is a structured immutability failure — the
+            // filesystem exception must never escape into the CLI catch.
+            let afterSha: string | null = null;
+            try {
+              afterSha = sha256File(req.input_path);
+              evidence.source_immutability_check = 'VERIFIED';
+            } catch {
+              afterSha = null;
+              evidence.source_immutability_check = 'UNREADABLE_OR_MISSING';
+            }
+            evidence.source_sha256_after = afterSha;
+            evidence.source_sha256_expected = expectedSha;
+            if (expectedSha !== null && afterSha !== expectedSha) {
+              errors.push('POSTFLIGHT: SOURCE_MUTATED_AFTER_PREFLIGHT (staged source SHA changed or unreadable after trusted preflight)');
+            }
+            const dims = ['owned_shape_names', 'text_markers', 'object_classes'] as const;
+            const mismatches = dims.filter((d) => JSON.stringify(trustedSig[d]) !== JSON.stringify(appSig[d]));
+            if (mismatches.length > 0) {
+              errors.push(`POSTFLIGHT: COPY_SLIDE_IDENTITY_MISMATCH dimensions=${mismatches.join(',')} (${srcPart} != ${appendedPart})`);
+            } else {
+              warnings.push(`POSTFLIGHT: semantic identity matched (${srcPart} == ${appendedPart})`);
+            }
+            evidence.operation_observation = `copied slide present as slide ${count}; identity ${mismatches.length === 0 ? 'MATCHED' : 'MISMATCHED'}`;
+            // manifest source is diagnostic evidence only (request is authoritative)
+            evidence.manifest_source_slide_identity = manifest?.source_slide_identity ?? null;
           }
-          evidence.operation_observation = `copied slide present as slide ${count}; identity ${mismatches.length === 0 ? 'MATCHED' : 'MISMATCHED'}`;
-          // manifest source is diagnostic evidence only (request is authoritative)
-          evidence.manifest_source_slide_identity = manifest?.source_slide_identity ?? null;
         }
       }
     }
   } else if (req.operation === 'COPY_ELEMENT') {
-    const shapes = runPythonToFile(SHAPE_INSPECTOR, [req.output_path], path.join(path.dirname(req.output_path), '_postflight_shapes_el.json'));
-    const slideNames = shapes.slide_shapes as Record<string, string[]>;
-    const lastSlideKey = `slide${obs.presentation_sldId_count}.xml`;
-    const names = slideNames[lastSlideKey] || [];
-    const hits = names.filter((n: string) => n === req.element);
-    evidence.operation_observation = {
-      target_slide: lastSlideKey,
-      element: req.element,
-      matches: hits.length,
-    };
-    if (hits.length !== 1) errors.push(`POSTFLIGHT: element ${req.element} not found exactly once on ${lastSlideKey}`);
+    // 1B-3B2R1 VH1: COPY_ELEMENT shape inspection is contained; element
+    // matches must never be fabricated from a failed helper invocation.
+    const shapesRes = safeRunPythonToFile(SHAPE_INSPECTOR, [req.output_path], path.join(path.dirname(req.output_path), '_postflight_shapes_el.json'));
+    if (!shapesRes.ok) {
+      errors.push(`POSTFLIGHT: SHAPE_INSPECTOR_FAILED (${shapesRes.diagnostic})`);
+    } else {
+      const shapes = shapesRes.value;
+      const slideNames = shapes.slide_shapes as Record<string, string[]>;
+      const lastSlideKey = `slide${obs.presentation_sldId_count}.xml`;
+      const names = slideNames[lastSlideKey] || [];
+      const hits = names.filter((n: string) => n === req.element);
+      evidence.operation_observation = {
+        target_slide: lastSlideKey,
+        element: req.element,
+        matches: hits.length,
+      };
+      if (hits.length !== 1) errors.push(`POSTFLIGHT: element ${req.element} not found exactly once on ${lastSlideKey}`);
+    }
   }
 
   return { ok: errors.length === 0, warnings, errors, evidence };
 }
 
-function runPythonToFile(script: string, args: string[], outJson: string): any {
-  execFileSync(PYTHON, [script, ...args, outJson], { encoding: 'utf-8', maxBuffer: 64 * 1024 * 1024 });
-  return JSON.parse(fs.readFileSync(outJson, 'utf-8'));
-}
-
 function sha256File(p: string): string {
   return crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex').toUpperCase();
+}
+
+// 1B-3B2R1 VH1: a single safe boundary for every postflight Python helper
+// invocation. Any helper failure (execFileSync throw, non-zero exit, missing
+// output file, unreadable file, invalid JSON) is returned as a structured
+// failure diagnostic; it never escapes postflight() as an uncontrolled
+// exception. Helper failure is a HARD postflight failure — callers must not
+// fabricate or continue with undefined helper results.
+function safeRunPythonToFile(script: string, args: string[], outJson: string): { ok: boolean; value?: any; diagnostic?: string } {
+  try {
+    execFileSync(PYTHON, [script, ...args, outJson], { encoding: 'utf-8', maxBuffer: 64 * 1024 * 1024 });
+    if (!fs.existsSync(outJson)) {
+      return { ok: false, diagnostic: 'helper produced no output file' };
+    }
+    let raw: string;
+    try {
+      raw = fs.readFileSync(outJson, 'utf-8');
+    } catch (err: any) {
+      return { ok: false, diagnostic: `helper output unreadable (${err && err.message ? String(err.message).slice(0, 200) : 'unknown'})` };
+    }
+    try {
+      return { ok: true, value: JSON.parse(raw) };
+    } catch {
+      return { ok: false, diagnostic: 'helper output not valid JSON' };
+    }
+  } catch (err: any) {
+    return { ok: false, diagnostic: (err && err.message ? String(err.message) : String(err)).slice(0, 300) };
+  }
 }
