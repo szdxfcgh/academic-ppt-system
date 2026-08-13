@@ -15,6 +15,7 @@ import {
 const PYTHON = process.env.PYTHON || 'python';
 const OBSERVER = path.resolve(__dirname, '..', '..', 'tooling', 'observe_pptx.py');
 const SHAPE_INSPECTOR = path.resolve(__dirname, '..', 'tooling', 'inspect_shapes.py');
+const SIGNATURE_TOOL = path.resolve(__dirname, '..', 'tooling', 'semantic_slide_signature.py');
 const ALLOWLISTED_EXTERNAL_REL_TARGETS = [
   'https://example.invalid/academicppt-owned-fixture',
 ];
@@ -23,13 +24,31 @@ function sha256File(p: string): string {
   return crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex').toUpperCase();
 }
 
-function confine(p: string, root: string): boolean {
-  const realRoot = fs.realpathSync(root);
-  const realP = fs.realpathSync(p);
-  if (fs.lstatSync(p).isSymbolicLink()) return false;
-  const rel = path.relative(realRoot, realP);
-  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+// Safe confinement predicate: expected invalid/absent paths return false
+// (EXPECTED INPUT/POLICY FAILURE) instead of throwing an uncontrolled
+// filesystem exception. Confinement semantics are unchanged (never weakened).
+function confine(p: string | undefined, root: string | undefined): boolean {
+  if (!p || !root) return false;
+  try {
+    if (!fs.existsSync(root) || !fs.existsSync(p)) return false;
+    if (fs.lstatSync(p).isSymbolicLink()) return false;
+    const realRoot = fs.realpathSync(root);
+    const realP = fs.realpathSync(p);
+    const rel = path.relative(realRoot, realP);
+    return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+  } catch {
+    return false; // expected path/input failure -> policy failure, not exception
+  }
 }
+
+const REQUIRED_PREFLIGHT_FIELDS = [
+  'request_id',
+  'operation',
+  'input_path',
+  'output_path',
+  'staging_root',
+  'output_dir',
+] as const;
 
 export interface PreflightResult {
   ok: boolean;
@@ -40,6 +59,29 @@ export interface PreflightResult {
 export function preflight(req: TemplateReuseRequest): PreflightResult {
   const errors: string[] = [];
   const evidence: Record<string, unknown> = {};
+
+  // 0) required-field completeness (self-contained; cli also gates this)
+  const missing = REQUIRED_PREFLIGHT_FIELDS.filter((f) => {
+    const v = (req as unknown as Record<string, unknown>)[f];
+    return v === undefined || v === null || (typeof v === 'string' && v.trim() === '');
+  });
+  if (missing.length > 0) {
+    return { ok: false, errors: [`REQUEST_REQUIRED_FIELD_MISSING: ${missing.join(',')}`], evidence };
+  }
+
+  // 0b) existence checks before any confinement/fs work (classified, no exceptions)
+  if (!fs.existsSync(req.staging_root)) {
+    errors.push('REQUEST_PATH_INVALID: staging root missing');
+  }
+  if (!fs.existsSync(req.output_dir)) {
+    errors.push('REQUEST_OUTPUT_PARENT_INVALID: output dir missing');
+  }
+  if (!fs.existsSync(req.input_path)) {
+    errors.push('REQUEST_PATH_INVALID: input file missing');
+  }
+  if (!fs.existsSync(path.dirname(req.output_path))) {
+    errors.push('REQUEST_OUTPUT_PARENT_INVALID: output parent directory missing');
+  }
 
   // 1) path confinement under staging root
   if (!confine(req.input_path, req.staging_root)) {
@@ -62,7 +104,7 @@ export function preflight(req: TemplateReuseRequest): PreflightResult {
     if (h !== FIXTURE_SHA256) errors.push(`POLICY: source SHA mismatch (expected ${FIXTURE_SHA256}, got ${h})`);
     if (size !== FIXTURE_BYTES) errors.push(`POLICY: source size mismatch (expected ${FIXTURE_BYTES}, got ${size})`);
   } else {
-    errors.push('POLICY: input file missing');
+    errors.push('REQUEST_PATH_INVALID: input file missing');
   }
 
   // 3) request id uniqueness (caller-provided; reject empty/duplicate by policy)
@@ -88,6 +130,26 @@ export function preflight(req: TemplateReuseRequest): PreflightResult {
       const hits = names.filter((n: string) => n === req.element);
       evidence.element_selector = { name: req.element, slide: `slide${slideId}.xml`, matches: hits.length };
       if (hits.length !== 1) errors.push(`POLICY: element selector must resolve exactly once (got ${hits.length})`);
+    }
+
+    // 4b) 1B-3B1A-R1 trust boundary: capture the requested source-slide
+    // semantic signature BEFORE any upstream execution. This frozen value is
+    // the ONLY source of source-truth for the postflight comparison; the
+    // postflight never re-derives source truth from req.input_path after the
+    // untrusted upstream boundary.
+    if (req.operation === 'COPY_SLIDE') {
+      const srcPart = `slide${slideId}.xml`;
+      try {
+        const srcSig = runPythonToFile(
+          SIGNATURE_TOOL,
+          [req.input_path, srcPart],
+          path.join(req.staging_root, '_preflight_source_signature.json'),
+        );
+        evidence.source_slide_part = srcPart;
+        evidence.source_slide_signature_pre_execution = srcSig;
+      } catch (err: any) {
+        errors.push(`POLICY: SIGNATURE_EXTRACTION_FAILED ${err && err.message ? err.message : String(err)}`);
+      }
     }
   }
 
