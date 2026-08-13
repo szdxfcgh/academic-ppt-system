@@ -17,7 +17,7 @@ export interface PostflightResult {
   evidence: Record<string, unknown>;
 }
 
-export function postflight(req: TemplateReuseRequest, manifest: OperationManifest | null): PostflightResult {
+export function postflight(req: TemplateReuseRequest, manifest: OperationManifest | null, trustedPreflightEvidence?: Record<string, unknown>): PostflightResult {
   const warnings: string[] = [];
   const errors: string[] = [];
   const evidence: Record<string, unknown> = {};
@@ -78,27 +78,44 @@ export function postflight(req: TemplateReuseRequest, manifest: OperationManifes
     } else {
       // Phase 1B-3B1A-R1: source identity is resolved independently from the
       // REQUEST (req.source_slide), never trusted from the execution manifest.
-      // execute.ts claims are outside the trust boundary.
+      // execute.ts claims are outside the trust boundary. Source TRUTH is the
+      // trusted pre-execution signature captured by preflight BEFORE the
+      // untrusted upstream boundary; postflight never re-derives source truth
+      // from req.input_path afterwards.
       const srcNum = resolveSlideId(req.source_slide);
       if (srcNum === null) {
         errors.push('POSTFLIGHT: COPY_SLIDE_SOURCE_UNRESOLVED (request source slide could not be resolved)');
       } else {
         const srcPart = `slide${srcNum}.xml`;
         const appendedPart = `slide${count}.xml`;
-        const srcSig = runPythonToFile(SIGNATURE_TOOL, [req.input_path, srcPart], path.join(path.dirname(req.output_path), '_source_signature.json'));
-        const appSig = runPythonToFile(SIGNATURE_TOOL, [req.output_path, appendedPart], path.join(path.dirname(req.output_path), '_appended_signature.json'));
-        evidence.source_signature = srcSig;
-        evidence.appended_signature = appSig;
-        const dims = ['owned_shape_names', 'text_markers', 'object_classes'] as const;
-        const mismatches = dims.filter((d) => JSON.stringify(srcSig[d]) !== JSON.stringify(appSig[d]));
-        if (mismatches.length > 0) {
-          errors.push(`POSTFLIGHT: COPY_SLIDE_IDENTITY_MISMATCH dimensions=${mismatches.join(',')} (${srcPart} != ${appendedPart})`);
+        const trusted = (trustedPreflightEvidence ?? {}) as Record<string, any>;
+        const trustedSig = trusted.source_slide_signature_pre_execution;
+        if (!trustedSig || trusted.source_slide_part !== srcPart) {
+          errors.push(`POSTFLIGHT: SIGNATURE_EXTRACTION_FAILED (no trusted pre-execution source signature for ${srcPart})`);
         } else {
-          warnings.push(`POSTFLIGHT: semantic identity matched (${srcPart} == ${appendedPart})`);
+          const appSig = runPythonToFile(SIGNATURE_TOOL, [req.output_path, appendedPart], path.join(path.dirname(req.output_path), '_appended_signature.json'));
+          evidence.trusted_source_signature = trustedSig;
+          evidence.appended_signature = appSig;
+          // Post-execution source immutability (additional guard). The semantic
+          // comparison still uses the PRE-EXECUTION trusted signature.
+          const expectedSha = typeof trusted.input_hash === 'string' ? trusted.input_hash : null;
+          const afterSha = sha256File(req.input_path);
+          evidence.source_sha256_after = afterSha;
+          evidence.source_sha256_expected = expectedSha;
+          if (expectedSha !== null && afterSha !== expectedSha) {
+            errors.push('POSTFLIGHT: SOURCE_MUTATED_AFTER_PREFLIGHT (staged source SHA changed after trusted preflight)');
+          }
+          const dims = ['owned_shape_names', 'text_markers', 'object_classes'] as const;
+          const mismatches = dims.filter((d) => JSON.stringify(trustedSig[d]) !== JSON.stringify(appSig[d]));
+          if (mismatches.length > 0) {
+            errors.push(`POSTFLIGHT: COPY_SLIDE_IDENTITY_MISMATCH dimensions=${mismatches.join(',')} (${srcPart} != ${appendedPart})`);
+          } else {
+            warnings.push(`POSTFLIGHT: semantic identity matched (${srcPart} == ${appendedPart})`);
+          }
+          evidence.operation_observation = `copied slide present as slide ${count}; identity ${mismatches.length === 0 ? 'MATCHED' : 'MISMATCHED'}`;
+          // manifest source is diagnostic evidence only (request is authoritative)
+          evidence.manifest_source_slide_identity = manifest?.source_slide_identity ?? null;
         }
-        evidence.operation_observation = `copied slide present as slide ${count}; identity ${mismatches.length === 0 ? 'MATCHED' : 'MISMATCHED'}`;
-        // manifest source is diagnostic evidence only (request is authoritative)
-        evidence.manifest_source_slide_identity = manifest?.source_slide_identity ?? null;
       }
     }
   } else if (req.operation === 'COPY_ELEMENT') {
@@ -121,4 +138,8 @@ export function postflight(req: TemplateReuseRequest, manifest: OperationManifes
 function runPythonToFile(script: string, args: string[], outJson: string): any {
   execFileSync(PYTHON, [script, ...args, outJson], { encoding: 'utf-8', maxBuffer: 64 * 1024 * 1024 });
   return JSON.parse(fs.readFileSync(outJson, 'utf-8'));
+}
+
+function sha256File(p: string): string {
+  return crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex').toUpperCase();
 }
