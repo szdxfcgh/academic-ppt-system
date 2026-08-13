@@ -26,17 +26,8 @@ export async function execute(req: TemplateReuseRequest): Promise<ExecuteResult>
   const errors: string[] = [];
   const evidence: Record<string, unknown> = {};
 
-  const isolatedRequire = createRequire(path.join(ISOLATED_RUNTIME_ROOT, 'package.json'));
-  const library = isolatedRequire(ISOLATED_RUNTIME_ROOT); // resolves dist/index.js (main)
-  evidence.upstream_resolved = isolatedRequire.resolve(ISOLATED_RUNTIME_ROOT);
-
-  const automizer = new library.Automizer({
-    templateDir: path.dirname(req.input_path),
-    outputDir: req.output_dir,
-    removeExistingSlides: false,
-    verbosity: 0,
-  });
-
+  // Request-derived diagnostic manifest state is independent of the runtime
+  // boundary; upstream success is never fabricated here.
   const manifest: OperationManifest = {
     operation_id: req.request_id,
     operation: req.operation,
@@ -48,6 +39,23 @@ export async function execute(req: TemplateReuseRequest): Promise<ExecuteResult>
   };
 
   try {
+    // 1B-3B1B2 D4: the entire isolated upstream runtime boundary — resolution,
+    // module load, Automizer construction and every invocation — is protected
+    // by ONE coherent structured failure path. Runtime-establishment failures
+    // (missing runtime root, missing package.json, resolution or require
+    // failure, construction failure) return through ExecuteResult instead of
+    // escaping as an uncontrolled exception.
+    const isolatedRequire = createRequire(path.join(ISOLATED_RUNTIME_ROOT, 'package.json'));
+    const library = isolatedRequire(ISOLATED_RUNTIME_ROOT); // resolves dist/index.js (main)
+    evidence.upstream_resolved = isolatedRequire.resolve(ISOLATED_RUNTIME_ROOT);
+
+    const automizer = new library.Automizer({
+      templateDir: path.dirname(req.input_path),
+      outputDir: req.output_dir,
+      removeExistingSlides: false,
+      verbosity: 0,
+    });
+
     automizer.loadRoot(FIXTURE_FILENAME);
     automizer.load(FIXTURE_FILENAME, 'core');
 
