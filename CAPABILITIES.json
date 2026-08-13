@@ -1,0 +1,14 @@
+{
+  "schema_version": "1.0",
+  "system": "Academic PPT System V1",
+  "status": "ARCHITECTURE_SELECTED_IMPLEMENTATION_PAUSED",
+  "capabilities": {
+    "open_source_landscape_review": {"status": "COMPLETED", "evidence": ["reports/academic_v1/01_OPEN_SOURCE_LANDSCAPE.md"]},
+    "source_inventory": {"status": "IMPLEMENTED_UNCERTIFIED"},
+    "deterministic_composition": {"status": "IMPLEMENTED_UNCERTIFIED"},
+    "pptx_generation": {"status": "POC_ONLY"},
+    "render_qa": {"status": "POC_ONLY"},
+    "pilot_v1": {"status": "NOT_RUN"},
+    "freeze_release": {"status": "NOT_CERTIFIED"}
+  }
+}

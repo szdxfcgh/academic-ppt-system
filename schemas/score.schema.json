@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "score.schema.json",
+  "type": "object",
+  "required": ["run_id", "dimensions", "coverage", "normalized_score", "grade", "recommend_release"],
+  "properties": {
+    "run_id": {"type": "string"},
+    "dimensions": {"type": "array", "items": {"type": "object", "required": ["id", "weight", "status", "score", "evidence"]}},
+    "coverage": {"type": "number", "minimum": 0, "maximum": 1},
+    "normalized_score": {"type": "number", "minimum": 0, "maximum": 100},
+    "grade": {"enum": ["S", "A", "B", "C", "D", "UNRATED"]},
+    "recommend_release": {"type": "boolean"}
+  }
+}

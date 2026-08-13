@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "composition-brief.schema.json",
+  "type": "object",
+  "required": ["slide", "core_claim", "page_task", "evidence_level", "content_types", "previous_signature", "recent_signatures", "next_function", "candidates", "selected_signature", "density"],
+  "properties": {
+    "slide": {"type": "integer", "minimum": 1},
+    "core_claim": {"type": "string", "minLength": 1},
+    "page_task": {"enum": ["explain", "prove", "compare", "summarize", "transition", "persuade"]},
+    "evidence_level": {"enum": ["A", "B", "C", "D", "E"]},
+    "is_real_experiment": {"type": "boolean"},
+    "content_types": {"type": "array", "items": {"enum": ["text", "image", "chart", "metric", "relationship"]}},
+    "relationship_type": {"type": ["string", "null"]},
+    "previous_signature": {"type": ["string", "null"]},
+    "recent_signatures": {"type": "array", "maxItems": 5, "items": {"type": "string"}},
+    "next_function": {"type": ["string", "null"]},
+    "candidates": {"type": "array", "minItems": 1, "items": {"type": "object"}},
+    "forbidden_candidates": {"type": "array", "items": {"type": "string"}},
+    "selected_signature": {"type": "string"},
+    "selection_reason": {"type": "string"},
+    "density": {"enum": ["HERO", "LIGHT", "MEDIUM", "DENSE"]}
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "qa.schema.json",
+  "type": "object",
+  "required": ["run_id", "status", "hard_failures", "warnings", "slides"],
+  "properties": {
+    "run_id": {"type": "string"},
+    "status": {"enum": ["PASS", "FAIL"]},
+    "hard_failures": {"type": "array"},
+    "warnings": {"type": "array"},
+    "slides": {"type": "array"}
+  }
+}

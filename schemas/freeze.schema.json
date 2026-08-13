@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "freeze.schema.json",
+  "type": "object",
+  "required": ["run_id", "frozen_at", "artifacts", "source_manifest_hash", "qa_hash", "score_hash", "powerpoint_desktop_status"],
+  "properties": {
+    "run_id": {"type": "string"},
+    "frozen_at": {"type": "string", "format": "date-time"},
+    "artifacts": {"type": "array", "items": {"type": "object", "required": ["path", "sha256", "size"]}},
+    "source_manifest_hash": {"type": "string"},
+    "qa_hash": {"type": "string"},
+    "score_hash": {"type": "string"},
+    "powerpoint_desktop_status": {"enum": ["VERIFIED", "POWERPOINT_DESKTOP_NOT_VERIFIED"]}
+  }
+}

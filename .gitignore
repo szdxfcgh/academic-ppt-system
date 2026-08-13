@@ -40,3 +40,6 @@ Thumbs.db
 process-dumps/
 raw-stdout/
 raw-stderr/
+
+# Python build artifacts
+*.egg-info/
