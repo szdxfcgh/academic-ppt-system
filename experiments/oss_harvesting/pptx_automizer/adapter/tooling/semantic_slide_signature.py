@@ -19,6 +19,7 @@ import json
 import re
 import sys
 import zipfile
+import xml.etree.ElementTree as ET
 
 P_NS = 'http://schemas.openxmlformats.org/presentationml/2006/main'
 A_NS = 'http://schemas.openxmlformats.org/drawingml/2006/main'
@@ -53,11 +54,19 @@ def main(input_pptx: str, slide_part: str, out_path: str) -> None:
         )
 
         # C. object classes — relationship-aware semantic classification
-        # TargetMode is optional (internal relationships omit it) -> make it optional
-        rels = re.findall(
-            r'<Relationship[^>]*Id="([^"]+)"[^>]*Type="([^"]+)"[^>]*Target="([^"]+)"(?:[^>]*TargetMode="([^"]*)")?',
-            rels_xml,
-        )
+        # Structural OPC relationship parsing (xml.etree.ElementTree):
+        # attribute order / whitespace / line breaks / prefix formatting are
+        # non-semantic and must not affect the parsed relationship set.
+        root = ET.fromstring(rels_xml)
+        rels = []
+        for child in root:
+            if child.tag.rsplit('}', 1)[-1] == 'Relationship':
+                rels.append((
+                    child.get('Id'),
+                    child.get('Type'),
+                    child.get('Target'),
+                    child.get('TargetMode') or '',
+                ))
         rel_by_id = {rid: (rtype, target, mode) for rid, rtype, target, mode in rels}
 
         chart = any(rtype.endswith(CHART_REL) for _, rtype, _, _ in rels)
