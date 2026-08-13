@@ -1,17 +1,28 @@
 // Phase 1B-3A — one-shot isolated CLI entrypoint
 // Phase 1B-3B1C-A — structured request failure hardening
+// Phase 1B-3B1C1 — network guard fail-closed repair
 // Usage: node dist/cli.js <request.json>
 // Process boundary: file + JSON only; no imports from AcademicPPT production Core.
 import * as fs from 'fs';
-import * as http from 'http';
-import * as https from 'https';
-import * as net from 'net';
-import * as dns from 'dns';
 import * as path from 'path';
+// CommonJS `import = require` bindings: the emitted JS binds the hook targets
+// DIRECTLY to the real Node core-module export objects (const http =
+// require('http')), never to TypeScript __importStar namespace wrappers whose
+// properties are non-configurable getters (the 1B-3B1C0 audit defect).
+import http = require('http');
+import https = require('https');
+import net = require('net');
+import dns = require('dns');
 import { buildResponse, SUPPORTED_OPERATIONS, UNSUPPORTED_OPERATIONS, TemplateReuseRequest } from './contracts';
 import { preflight } from './preflight';
 import { execute } from './execute';
 import { postflight } from './observe';
+
+// Classified adapter input failures: stable machine-readable envelope + deterministic exit code.
+function fatalEnvelope(kind: string, exitCode: number, detail?: unknown): never {
+  console.error(JSON.stringify({ final_status: kind, exit_code: exitCode, detail: detail ?? null }));
+  process.exit(exitCode);
+}
 
 // Network exclusion: any attempt is recorded and rejected.
 const networkAttempts: string[] = [];
@@ -21,31 +32,54 @@ function blockNetwork(name: string) {
     throw new Error(`Unexpected runtime network call: ${name}`);
   };
 }
-function blockProperty(target: unknown, name: string): void {
-  const obj = target as Record<string, unknown>;
-  try {
-    Object.defineProperty(obj, name, { value: blockNetwork(name), configurable: true, writable: true });
-  } catch {
-    try { obj[name] = blockNetwork(name); } catch { /* record-only fallback */ }
+
+// The declared required exclusion surface (1B-3B1C1). The contract is NOT
+// expanded: exactly these nine hooks, nothing else.
+const REQUIRED_HOOKS: Array<{ name: string; target: unknown; prop: string }> = [
+  { name: 'global.fetch', target: globalThis, prop: 'fetch' },
+  { name: 'http.request', target: http, prop: 'request' },
+  { name: 'http.get', target: http, prop: 'get' },
+  { name: 'https.request', target: https, prop: 'request' },
+  { name: 'https.get', target: https, prop: 'get' },
+  { name: 'net.connect', target: net, prop: 'connect' },
+  { name: 'net.createConnection', target: net, prop: 'createConnection' },
+  { name: 'dns.lookup', target: dns, prop: 'lookup' },
+  { name: 'dns.resolve', target: dns, prop: 'resolve' },
+];
+
+function installNetworkGuard(): void {
+  for (const hook of REQUIRED_HOOKS) {
+    const obj = hook.target as Record<string, unknown>;
+    if (hook.name === 'global.fetch' && typeof obj[hook.prop] !== 'function') {
+      // declared surface absent in this runtime: classify explicitly and fail
+      // closed rather than silently pretending coverage
+      fatalEnvelope('NETWORK_GUARD_INSTALLATION_FAILED', 6, { hook: hook.name, reason: 'declared network surface not present in runtime' });
+    }
+    const blocker = blockNetwork(hook.name);
+    let installed = false;
+    try {
+      Object.defineProperty(obj, hook.prop, { value: blocker, configurable: true, writable: true });
+      installed = true;
+    } catch {
+      installed = false;
+    }
+    if (!installed) {
+      try {
+        obj[hook.prop] = blocker;
+        installed = true;
+      } catch {
+        installed = false;
+      }
+    }
+    // Identity verification: assume nothing about defineProperty/assignment
+    // success — the property must actually resolve to our blocker.
+    if (!installed || obj[hook.prop] !== blocker) {
+      fatalEnvelope('NETWORK_GUARD_INSTALLATION_FAILED', 6, { hook: hook.name, message: 'required network hook could not be installed or verified; refusing to start unprotected' });
+    }
   }
 }
-try {
-  Object.defineProperty(globalThis, 'fetch', { value: blockNetwork('global.fetch'), configurable: true, writable: true });
-} catch { /* ignore */ }
-blockProperty(http, 'request');
-blockProperty(http, 'get');
-blockProperty(https, 'request');
-blockProperty(https, 'get');
-blockProperty(net, 'connect');
-blockProperty(net, 'createConnection');
-blockProperty(dns, 'lookup');
-blockProperty(dns, 'resolve');
 
-// Classified adapter input failures: stable machine-readable envelope + deterministic exit code.
-function fatalEnvelope(kind: string, exitCode: number, detail?: unknown): never {
-  console.error(JSON.stringify({ final_status: kind, exit_code: exitCode, detail: detail ?? null }));
-  process.exit(exitCode);
-}
+installNetworkGuard();
 
 const REQUIRED_FIELDS = [
   'schema_version',
