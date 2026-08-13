@@ -96,15 +96,31 @@ export function preflight(req: TemplateReuseRequest): PreflightResult {
   }
 
   // 2) source is a fresh copy of the frozen fixture (identity exact)
+  let sourceIdentityMismatch = false;
   if (fs.existsSync(req.input_path)) {
     const h = sha256File(req.input_path);
     const size = fs.statSync(req.input_path).size;
     evidence.input_hash = h;
     evidence.input_size = size;
-    if (h !== FIXTURE_SHA256) errors.push(`POLICY: source SHA mismatch (expected ${FIXTURE_SHA256}, got ${h})`);
-    if (size !== FIXTURE_BYTES) errors.push(`POLICY: source size mismatch (expected ${FIXTURE_BYTES}, got ${size})`);
+    if (h !== FIXTURE_SHA256) {
+      errors.push(`POLICY: source SHA mismatch (expected ${FIXTURE_SHA256}, got ${h})`);
+      sourceIdentityMismatch = true;
+    }
+    if (size !== FIXTURE_BYTES) {
+      errors.push(`POLICY: source size mismatch (expected ${FIXTURE_BYTES}, got ${size})`);
+      sourceIdentityMismatch = true;
+    }
   } else {
     errors.push('REQUEST_PATH_INVALID: input file missing');
+  }
+
+  // 2b) 1B-3B5R1A strong fixture identity short-circuit. The adapter is
+  // qualified ONLY against the exact frozen fixture. A source that fails
+  // exact SHA/size identity is untrusted and has no authority to proceed
+  // into deeper package inspection — a malformed tampered package must
+  // never reach the Python observers and escape as an internal failure.
+  if (sourceIdentityMismatch) {
+    return { ok: false, errors, evidence };
   }
 
   // 3) request id uniqueness (caller-provided; reject empty/duplicate by policy)
