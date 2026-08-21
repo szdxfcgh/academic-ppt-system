@@ -1,0 +1,86 @@
+name: tmp-dembele-source-fetch
+
+on:
+  push:
+    branches:
+      - tmp/dembele-original-frame-stitch
+    paths:
+      - .github/workflows/tmp_dembele_source.yml
+
+permissions:
+  contents: read
+
+jobs:
+  fetch-source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install downloader
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install yt-dlp requests
+
+      - name: Fetch the public Dailymotion source
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p out
+          URL='https://www.dailymotion.com/video/x5qga70'
+          if yt-dlp --no-playlist --merge-output-format mp4 -f 'bv*+ba/b' -o 'out/source.%(ext)s' "$URL"; then
+            echo 'yt-dlp succeeded'
+          else
+            echo 'yt-dlp failed; trying public cobalt instances'
+            python - <<'PY'
+          import os, requests, sys
+          source='https://www.dailymotion.com/video/x5qga70'
+          apis=[
+              'https://cobaltapi.kittycat.boo',
+              'https://api-cobalt.eversiege.network',
+              'https://grapefruit.clxxped.lol',
+              'https://cobalt-api.lamps-dev.dev',
+              'https://nuko-c.meowing.de',
+          ]
+          headers={'Accept':'application/json','Content-Type':'application/json'}
+          for api in apis:
+              try:
+                  r=requests.post(api.rstrip('/')+'/',headers=headers,json={
+                      'url':source,'videoQuality':'720','downloadMode':'auto','filenameStyle':'basic'
+                  },timeout=30)
+                  print(api, r.status_code, r.text[:500])
+                  r.raise_for_status()
+                  j=r.json()
+                  u=j.get('url')
+                  if not u and j.get('picker'):
+                      u=j['picker'][0].get('url')
+                  if not u:
+                      continue
+                  with requests.get(u,stream=True,timeout=60,allow_redirects=True) as rr:
+                      rr.raise_for_status()
+                      with open('out/source.mp4','wb') as f:
+                          for chunk in rr.iter_content(1024*1024):
+                              if chunk: f.write(chunk)
+                  if os.path.getsize('out/source.mp4') > 100000:
+                      print('downloaded via', api, os.path.getsize('out/source.mp4'))
+                      sys.exit(0)
+              except Exception as e:
+                  print('FAILED', api, repr(e))
+          raise SystemExit('all download routes failed')
+          PY
+          fi
+          ls -lh out
+          F=$(find out -type f | head -n 1)
+          ffprobe -hide_banner "$F" || true
+
+      - name: Upload source video
+        uses: actions/upload-artifact@v4
+        with:
+          name: dembele-2017-source
+          path: out/*
+          if-no-files-found: error
+          retention-days: 1
