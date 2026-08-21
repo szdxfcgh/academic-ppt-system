@@ -9,29 +9,32 @@ on:
       - .github/workflows/tmp_dembele_source.yml
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   fetch-source:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: tmp/dembele-original-frame-stitch
 
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
-      - name: Install downloader
+      - name: Install downloader and image tools
         run: |
           python -m pip install --upgrade pip
-          python -m pip install yt-dlp requests
+          python -m pip install yt-dlp requests opencv-python-headless pillow
 
-      - name: Fetch the public Dailymotion source
+      - name: Fetch public Dailymotion source
         shell: bash
         run: |
           set -euxo pipefail
-          mkdir -p out
+          rm -rf tmp_dembele out
+          mkdir -p out tmp_dembele
           URL='https://www.dailymotion.com/video/x5qga70'
           if yt-dlp --no-playlist --merge-output-format mp4 -f 'bv*+ba/b' -o 'out/source.%(ext)s' "$URL"; then
             echo 'yt-dlp succeeded'
@@ -61,7 +64,7 @@ jobs:
                       u=j['picker'][0].get('url')
                   if not u:
                       continue
-                  with requests.get(u,stream=True,timeout=60,allow_redirects=True) as rr:
+                  with requests.get(u,stream=True,timeout=90,allow_redirects=True) as rr:
                       rr.raise_for_status()
                       with open('out/source.mp4','wb') as f:
                           for chunk in rr.iter_content(1024*1024):
@@ -74,14 +77,71 @@ jobs:
           raise SystemExit('all download routes failed')
           PY
           fi
-          ls -lh out
-          F=$(find out -type f | head -n 1)
-          ffprobe -hide_banner "$F" || true
+          F=$(find out -type f -name 'source.*' | head -n 1)
+          echo "SOURCE=$F" >> "$GITHUB_ENV"
+          ffprobe -v quiet -print_format json -show_format -show_streams "$F" > tmp_dembele/ffprobe.json
+          ls -lh "$F"
 
-      - name: Upload source video
-        uses: actions/upload-artifact@v4
-        with:
-          name: dembele-2017-source
-          path: out/*
-          if-no-files-found: error
-          retention-days: 1
+      - name: Build timestamped contact sheets from real frames
+        shell: bash
+        run: |
+          python - <<'PY'
+          import cv2, math, os
+          from PIL import Image, ImageDraw, ImageFont
+
+          path=os.environ['SOURCE']
+          cap=cv2.VideoCapture(path)
+          fps=cap.get(cv2.CAP_PROP_FPS) or 25
+          n=cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0
+          dur=n/fps if fps else 0
+          W=int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)); H=int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+          with open('tmp_dembele/video_info.txt','w') as f:
+              f.write(f'fps={fps}\nframes={n}\nduration={dur}\nsize={W}x{H}\n')
+
+          def grab(t):
+              cap.set(cv2.CAP_PROP_POS_MSEC, t*1000)
+              ok, fr=cap.read()
+              if not ok: return None
+              fr=cv2.cvtColor(fr, cv2.COLOR_BGR2RGB)
+              return Image.fromarray(fr)
+
+          thumb_w=320
+          cols=5; rows=10; step=0.5
+          per=cols*rows
+          sheet_span=per*step
+          sheets=max(1, math.ceil(dur/sheet_span))
+          for si in range(min(sheets,4)):
+              start=si*sheet_span
+              thumbs=[]
+              for k in range(per):
+                  t=start+k*step
+                  if t>=dur: break
+                  im=grab(t)
+                  if im is None: continue
+                  th=round(im.height*thumb_w/im.width)
+                  im=im.resize((thumb_w,th), Image.Resampling.LANCZOS)
+                  d=ImageDraw.Draw(im)
+                  label=f'{t:05.1f}s'
+                  d.rectangle((0,0,85,25), fill=(0,0,0))
+                  d.text((5,4),label,fill=(255,255,255))
+                  thumbs.append(im)
+              if not thumbs: continue
+              cell_h=max(x.height for x in thumbs)
+              sheet=Image.new('RGB',(cols*thumb_w,rows*cell_h),(30,30,30))
+              for i,im in enumerate(thumbs):
+                  x=(i%cols)*thumb_w; y=(i//cols)*cell_h
+                  sheet.paste(im,(x,y))
+              sheet.save(f'tmp_dembele/contact_{si:02d}_{start:.1f}-{start+sheet_span:.1f}s.jpg',quality=90,subsampling=0)
+          cap.release()
+          PY
+          ls -lh tmp_dembele
+
+      - name: Commit inspection outputs to temporary branch
+        shell: bash
+        run: |
+          set -eux
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add tmp_dembele
+          git commit -m 'tmp: add real-frame contact sheets' || exit 0
+          git push origin HEAD:tmp/dembele-original-frame-stitch
